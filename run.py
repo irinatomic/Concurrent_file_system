@@ -50,6 +50,15 @@ def get_file_part(part_id):
             return part_data
     return None
 
+# I/O PROCESSES 
+def delete_file_part(part_filename: str) -> bool:
+    file_path = os.path.join(config[STORAGE][PARTS_DIRECTORY], f"{part_filename}.dat")
+    if os.path.exists(file_path) and os.path.isfile(file_path):
+        os.remove(file_path)
+        return True
+    else:
+        return False
+
 # PUT
 def put(filename):
     file_id = len(file_register)
@@ -77,8 +86,8 @@ def put(filename):
         file_register[file_id][PARTS_COUNT] = part_index
 
 # GET
-def get(file_id):
-    file_id = int(file_id)
+def get(file_id_arg):
+    file_id = int(file_id_arg)
     if file_id in file_register and file_register[file_id][READY]:
         parts_count = file_register[file_id][PARTS_COUNT]
         new_filename = f"new_file_{file_id}_{datetime.timestamp(datetime.now())}.txt"
@@ -99,8 +108,38 @@ def get(file_id):
                     break
 
 # DELETE
-def delete(filename):
-    sys.stdout.write("Deleting file: " + filename + "\n")
+def delete(file_id_arg):
+    file_id = int(file_id_arg)
+
+    # mark the file and file parts as not ready
+    if file_id in file_register and file_register[file_id][READY]:
+        file_register[file_id][READY] = False
+        parts_count = file_register[file_id][PARTS_COUNT]
+        part_missing = False
+        for i in range(parts_count):
+            part_id = f"{file_id}_{i}"
+            if part_id in parts_register:
+                parts_register[part_id][READY] = False
+            else:
+                part_missing = True
+                break
+        
+        if not part_missing:
+            # let the U/I process delete the file part - success -> delete file part from parts_register
+            success = True
+            for i in range(parts_count):
+                part_id = f"{file_id}_{i}"
+                if delete_file_part(part_id):
+                    del parts_register[part_id]
+                else:
+                    success = False
+                    break
+            if success:
+                del file_register[file_id]
+            else:
+                sys.stdout.write("Error: Some parts could not be deleted\n")
+        else:
+            sys.stdout.write("Error: Some parts are missing\n")
 
 # LIST
 def list_files():
