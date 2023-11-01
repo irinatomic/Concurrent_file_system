@@ -1,5 +1,6 @@
 storage:
-  parts_directory:  /Users/irinatomic/Documents/RAF/5. semestar/paralelni_algoritmi
+  parts_directory:  /Users/irinatomic/Documents/RAF/5. semestar/paralelni/project_files/file_parts
+  saved_directory: /Users/irinatomic/Documents/RAF/5. semestar/paralelni/project_files/saved_files
 system:
   io_processes: 8
-  part_size: 64            # 64 kb
+  part_size:  1048576          # 1 megabyte = 1024 * 1024 bytes

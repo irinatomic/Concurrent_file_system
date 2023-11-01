@@ -20,13 +20,11 @@ def process_file_part(part_id, part_data):
     return part_id, md5_hash
 
 def put(filename):
-
     file_id = len(file_register)
     file_register[file_id] = {"filename": filename, "ready": False}
     part_size = config['system']['part_size']
 
     with open(filename, 'rb') as file:
-        sys.stdout.write(f"id: {file_id}\n")
         part_index = 0
         while True:
             part_data = file.read(part_size)
@@ -55,11 +53,38 @@ def delete(filename):
 def list_files():
     sys.stdout.write("listing files\n")
 
+# Delete all files in the parts directory and saved directory
+def delete_extra_files():
+    parts_directory = config['storage']['parts_directory']
+    if os.path.exists(parts_directory) and os.path.isdir(parts_directory):
+        files = os.listdir(parts_directory)
+        for file in files:
+            file_path = os.path.join(parts_directory, file)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+            else:
+                sys.stdout.write(f"Skipping non-file: {file_path}")
+    else:
+        sys.stdout.write(f"Directory does not exist: {parts_directory}")
+
+    saved_directory = config['storage']['saveddirectory']
+    if os.path.exists(saved_directory) and os.path.isdir(saved_directory):
+        files = os.listdir(saved_directory)
+        for file in files:
+            file_path = os.path.join(saved_directory, file)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+            else:
+                sys.stdout.write(f"Skipping non-file: {file_path}")
+    else:
+        sys.stdout.write(f"Directory does not exist: {saved_directory}")
+
 def main():
     threads = []
 
     while True:
-        command = input("Enter a command: ")
+        sys.stdout.write("Enter a command: ")
+        command = input()
         parts = command.split()
         action = parts[0]
 
@@ -87,6 +112,8 @@ def main():
 
     for thread in threads:
         thread.join()
+
+    delete_extra_files()
 
 if __name__ == "__main__":
     main()
