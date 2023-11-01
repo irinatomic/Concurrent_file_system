@@ -9,6 +9,8 @@ __pycache__/
 # ifnore DS_Store
 .DS_Store
 
+*.txt
+
 # Distribution / packaging
 .Python
 build/

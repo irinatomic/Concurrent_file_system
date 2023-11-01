@@ -1,8 +1,50 @@
 import threading
+import hashlib
+import zlib
+import yaml
 import sys
+import os
+
+file_register = {}
+parts_register = {}
+
+with open('config.yaml', 'r') as config_file:
+    config = yaml.safe_load(config_file)
+
+def process_file_part(part_id, part_data):
+    md5_hash = hashlib.md5(part_data).hexdigest()
+    compressed_data = zlib.compress(part_data)
+    # write the compressed data to a file
+    with open(os.path.join(config['storage']['parts_directory'], f"{part_id}.dat"), 'wb') as writer:
+        writer.write(compressed_data)
+    return part_id, md5_hash
 
 def put(filename):
-    sys.stdout.write("putting file: " + filename + "\n")
+
+    file_id = len(file_register)
+    file_register[file_id] = {"filename": filename, "ready": False}
+    part_size = config['system']['part_size']
+
+    with open(filename, 'rb') as file:
+        sys.stdout.write(f"id: {file_id}\n")
+        part_index = 0
+        while True:
+            part_data = file.read(part_size)
+            if not part_data:
+                break                               # EOF
+            
+            part_id = f"{file_id}_{part_index}"
+            parts_register[part_id] = {"ready": False}
+
+            part_id, md5_hash = process_file_part(part_id, part_data)
+            parts_register[part_id]["md5_hash"] = md5_hash
+            parts_register[part_id]["ready"] = True
+            part_index += 1
+
+    # Check if the whole file is ready
+    if all(parts_register[f"{file_id}_{i}"]["ready"] for i in range(part_index)):
+        file_register[file_id]["ready"] = True
+
 
 def get(filename):
     sys.stdout.write("getting file: " + filename + "\n")

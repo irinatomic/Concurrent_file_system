@@ -2,4 +2,4 @@ storage:
   parts_directory:  /Users/irinatomic/Documents/RAF/5. semestar/paralelni_algoritmi
 system:
   io_processes: 8
-  max_memory: 64            # 64 kb
+  part_size: 64            # 64 kb
