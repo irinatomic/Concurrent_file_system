@@ -1,4 +1,5 @@
 from datetime import datetime
+import multiprocessing
 import threading
 import hashlib
 import zlib
@@ -27,8 +28,11 @@ SAVED_DIRECTORY = "saved_directory"
 with open('config.yaml', 'r') as config_file:
     config = yaml.safe_load(config_file)
 
+part_size = config[SYSTEM][PART_SIZE]  # Part size is 1 MB
+
 # I/O PROCESSES
-def process_file_part(part_id, part_data):
+def process_file_part(arguments):
+    part_id, part_data = arguments
     md5_hash = hashlib.md5(part_data).hexdigest()
     compressed_data = zlib.compress(part_data)
 
@@ -60,30 +64,35 @@ def delete_file_part(part_filename: str) -> bool:
         return False
 
 # PUT
-def put(filename):
+def put(filename, io_pool):
     file_id = len(file_register)
     file_register[file_id] = {FILENAME: filename, READY: False}
-    part_size = config[SYSTEM][PART_SIZE]   # Part size is 1 MB
 
     with open(filename, 'rb') as file:
-        part_index = 0
-        while True:
-            part_data = file.read(part_size)
-            if not part_data:
-                break  # EOF
+        num_parts = (os.path.getsize(filename) + part_size - 1) // part_size
+        part_ids = list(range(num_parts))
+        batch_size = 4
 
-            part_id = f"{file_id}_{part_index}"
-            parts_register[part_id] = {READY: False}
+        for i in range(0, num_parts, batch_size):
+            parts_data_tuples = []                                  # List of tuples (part_id, part_data)
+            parts_ids_batch = part_ids[i:i + batch_size]
+            for part_id in parts_ids_batch:
+                part_data = file.read(part_size)
+                if not part_data:
+                    break
+                parts_data_tuples.append((f"{file_id}_{part_id}", part_data))
 
-            part_id, md5_hash = process_file_part(part_id, part_data)
-            parts_register[part_id][MD5_HASH] = md5_hash
-            parts_register[part_id][READY] = True
-            part_index += 1
+            # Process the parts in parallel
+            results = io_pool.map(process_file_part, parts_data_tuples)
 
-    # Check if the whole file is ready
-    if all(parts_register[f"{file_id}_{i}"][READY] for i in range(part_index)):
+            # Write the results to the parts register
+            for full_part_id, md5_hash in results:
+                parts_register[full_part_id] = {MD5_HASH: md5_hash, READY: True}
+
+    if all(parts_register[f"{file_id}_{i}"][READY] for i in range(num_parts)):
         file_register[file_id][READY] = True
-        file_register[file_id][PARTS_COUNT] = part_index
+        file_register[file_id][PARTS_COUNT] = num_parts
+
 
 # GET
 def get(file_id_arg):
@@ -96,7 +105,7 @@ def get(file_id_arg):
 
         with open(new_filepath, 'wb') as writer:
             for i in range(parts_count):
-                part_id = f"{file_id}_{i}"
+                part_id = f"{file_id}_{i}"                                              # part_id = filename of the saved part
                 if part_id in parts_register and parts_register[part_id][READY]:
                     part_data = get_file_part(part_id)
                     if not part_data:
@@ -144,7 +153,8 @@ def delete(file_id_arg):
 # LIST
 def list_files():
     for file_id in file_register:
-        sys.stdout.write(f"{file_id}: {file_register[file_id][FILENAME]}\n")
+        if file_register[file_id][READY]:
+            sys.stdout.write(f"{file_id}: {file_register[file_id][FILENAME]}\n")
 
 # Function to delete extra files:
 #  - Files in the parts directory
@@ -168,7 +178,7 @@ def delete_extra_files():
     delete_files_in_directory(parts_directory)
     delete_files_in_directory(saved_directory)
 
-def main():
+def main(io_pool):
     threads = []
 
     while True:
@@ -178,7 +188,7 @@ def main():
         action = parts[0]
 
         if action == "put" and len(parts) == 2:
-            t = threading.Thread(target=put, args=(parts[1],))
+            t = threading.Thread(target=put, args=(parts[1], io_pool))
             t.start()
             threads.append(t)
         elif action == "get" and len(parts) == 2:
@@ -199,10 +209,12 @@ def main():
         else:
             sys.stdout.write("Invalid command\n")
 
+    io_pool.terminate()             # Doesn't wait for tasks to finish - kills all processes
     for thread in threads:
         thread.join()
 
     delete_extra_files()
 
 if __name__ == "__main__":
-    main()
+    io_pool = multiprocessing.Pool(processes=config[SYSTEM][IO_PROCESSES])
+    main(io_pool)
