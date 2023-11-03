@@ -12,11 +12,9 @@ file_register = {}
 parts_register = {}
 file_counter = 0
 
-# Locks for the file and part register
-# Will change in the future so for every element in the dictionary there is a lock
-# For now, only one lock for the whole dictionary
-file_register_lock = threading.Lock()
-parts_register_lock = threading.Lock()
+# Create an additional dictionary to store locks for every file in file_register.
+# Locks for individual parts are not needed since only one thread accesses the parts while processing the file.
+file_register_locks = {}
 
 # Constants for the file and part register
 READY = "ready"
@@ -81,8 +79,7 @@ def put(filename, io_pool, file_id):
     global file_register
     global parts_register
 
-    # BICE SAMO LOCK JEDNOG ELEMENTA IZ D
-    file_register_lock.acquire()
+    file_register_locks[file_counter].acquire()
     file_register[file_id] = {FILENAME: filename, READY: False}
 
     with open(filename, 'rb') as file:
@@ -108,7 +105,7 @@ def put(filename, io_pool, file_id):
     if all(parts_register[f"{file_id}_{i}"][READY] for i in range(num_parts)):
         file_register[file_id][READY] = True
         file_register[file_id][PARTS_COUNT] = num_parts
-    file_register_lock.release()
+    file_register_locks[file_counter].release()
 
 # GET
 def get(file_id_arg, io_pool):
@@ -116,10 +113,9 @@ def get(file_id_arg, io_pool):
     global parts_register
     file_id = int(file_id_arg)
 
-    file_register_lock.acquire()
-    file_ready = file_register[file_id][READY]
+    file_register_locks[file_id].acquire()
 
-    if file_id in file_register and file_ready:
+    if file_id in file_register and file_register[file_id][READY]:
         num_parts = file_register[file_id][PARTS_COUNT]
         part_ids = list(range(num_parts))
 
@@ -133,9 +129,7 @@ def get(file_id_arg, io_pool):
                 part_ids_batch = part_ids[i:i + batch_size]
                 for part_id in part_ids_batch:
                     full_part_id = f"{file_id}_{part_id}"
-                    parts_register_lock.acquire()
                     md5_hash = parts_register[full_part_id][MD5_HASH]
-                    parts_register_lock.release()
                     parts_data_tuples.append((full_part_id, md5_hash))
 
                 # Process the parts in parallel
@@ -145,11 +139,11 @@ def get(file_id_arg, io_pool):
                 for part_data in results:
                     if not part_data:
                         sys.stdout.write(f"Error: Some parts are missing or corrupted\n")
-                        file_register_lock.release()
+                        file_register_locks[file_id].release()
                         return
                     writer.write(part_data)
 
-    file_register_lock.release()
+    file_register_locks[file_id].release()
 
 # DELETE
 def delete(file_id_arg, io_pool):
@@ -157,7 +151,8 @@ def delete(file_id_arg, io_pool):
     global parts_register
     file_id = int(file_id_arg)
 
-    file_register_lock.acquire()
+    file_register_locks[file_id].acquire()
+
     if file_id in file_register and file_register[file_id][READY]:
         # mark the file and file parts as not ready
         file_register[file_id][READY] = False
@@ -174,27 +169,23 @@ def delete(file_id_arg, io_pool):
             # Check if all parts in the chunk were successfully deleted
             if all(results):
                 # Remove deleted parts from parts_register
-                parts_register_lock.acquire()
                 for full_part_id in chunk:
                     if full_part_id in parts_register:
                         del parts_register[full_part_id]
-                parts_register_lock.release()
             else:
                 sys.stdout.write("Error: Some parts could not be deleted\n")
-
-        file_register_lock.release()
+                
+        file_register_locks[file_id].release()
     else:
-        file_register_lock.release()
- 
+        file_register_locks[file_id].release()
+
 # LIST
 def list_files():
     for file_id in file_register:
         if file_register[file_id][READY]:
             sys.stdout.write(f"{file_id}: {file_register[file_id][FILENAME]}\n")
 
-# Function to delete extra files:
-#  - Files in the parts directory
-#  - Files in the saved directory
+# Delete created files
 def delete_extra_files():
     def delete_files_in_directory(directory):
         if os.path.exists(directory) and os.path.isdir(directory):
@@ -226,6 +217,7 @@ def main(io_pool):
 
         if action == "put" and len(parts) == 2:
             file_counter += 1
+            file_register_locks[file_counter] = threading.Lock()
             t = threading.Thread(target=put, args=(parts[1], io_pool, file_counter))
             t.start()
             threads.append(t)
