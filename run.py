@@ -111,10 +111,9 @@ def put(filename, io_pool, file_id):
     file_register_lock.release()
 
 # GET
-def get(file_id_arg):
+def get(file_id_arg, io_pool):
     global file_register
     global parts_register
-
     file_id = int(file_id_arg)
 
     file_register_lock.acquire()
@@ -153,51 +152,45 @@ def get(file_id_arg):
     file_register_lock.release()
 
 # DELETE
-def delete(file_id_arg):
+def delete(file_id_arg, io_pool):
+    global file_register
+    global parts_register
     file_id = int(file_id_arg)
 
-    # mark the file and file parts as not ready
+    file_register_lock.acquire()
     if file_id in file_register and file_register[file_id][READY]:
+        # mark the file and file parts as not ready
         file_register[file_id][READY] = False
         parts_count = file_register[file_id][PARTS_COUNT]
-        part_missing = False
-        for i in range(parts_count):
-            part_id = f"{file_id}_{i}"
-            if part_id in parts_register:
-                parts_register[part_id][READY] = False
-            else:
-                part_missing = True
-                break
-        
-        if not part_missing:
-            # let the U/I process delete the file part - success -> delete file part from parts_register
-            success = True
-            for i in range(parts_count):
-                part_id = f"{file_id}_{i}"
-                if delete_file_part(part_id):
-                    del parts_register[part_id]
-                else:
-                    success = False
-                    break
-            if success:
-                del file_register[file_id]
+
+        # Split parts into chunks
+        full_part_ids = [f"{file_id}_{i}" for i in range(parts_count)]
+        chunk_size = 4
+
+        for i in range(0, parts_count, chunk_size):
+            chunk = full_part_ids[i:i + chunk_size]                         # List of 4 full_part_ids = part_filename
+            results = io_pool.map(delete_file_part, chunk)
+
+            # Check if all parts in the chunk were successfully deleted
+            if all(results):
+                # Remove deleted parts from parts_register
+                parts_register_lock.acquire()
+                for full_part_id in chunk:
+                    if full_part_id in parts_register:
+                        del parts_register[full_part_id]
+                parts_register_lock.release()
             else:
                 sys.stdout.write("Error: Some parts could not be deleted\n")
-        else:
-            sys.stdout.write("Error: Some parts are missing\n")
 
+        file_register_lock.release()
+    else:
+        file_register_lock.release()
+ 
 # LIST
 def list_files():
-    file_register_lock.acquire()
     for file_id in file_register:
         if file_register[file_id][READY]:
             sys.stdout.write(f"{file_id}: {file_register[file_id][FILENAME]}\n")
-    file_register_lock.release()
-
-    parts_register_lock.acquire()
-    for key in parts_register.keys():
-            sys.stdout.write(f"{key}: {parts_register[key]}\n")
-    parts_register_lock.release()
 
 # Function to delete extra files:
 #  - Files in the parts directory
@@ -237,11 +230,11 @@ def main(io_pool):
             t.start()
             threads.append(t)
         elif action == "get" and len(parts) == 2:
-            t = threading.Thread(target=get, args=(parts[1],))
+            t = threading.Thread(target=get, args=(parts[1], io_pool))
             t.start()
             threads.append(t)
         elif action == "delete" and len(parts) == 2:
-            t = threading.Thread(target=delete, args=(parts[1],))
+            t = threading.Thread(target=delete, args=(parts[1], io_pool))
             t.start()
             threads.append(t)
         elif action == "list" and len(parts) == 1:
