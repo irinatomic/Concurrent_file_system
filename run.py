@@ -85,11 +85,7 @@ def put(filename, io_pool, file_id):
     global file_register
     global parts_register
     global memory_counter
-
-    ispis = f"{file_id} PUT\n"
-    sys.stdout.write(ispis)
     
-
     file_register_locks[file_id].acquire()
     file_register[file_id] = {FILENAME: filename, READY: False}
 
@@ -100,27 +96,16 @@ def put(filename, io_pool, file_id):
 
         for i in range(0, num_parts, batch_size):
             
+            # Memory management
             memory_condition.acquire()
             while True:
-                
-                sys.stdout.write(str(file_id)) 
                 memory_counter_lock.acquire()
-
                 if memory_counter + extra_memory <= config[SYSTEM][RAM]:
-
                     memory_counter += extra_memory
-
-                    ispis = f"{file_id} {memory_counter} THEN\n"
-                    sys.stdout.write(ispis)
-
                     memory_counter_lock.release()
                     memory_condition.release()
-
                     break
                 else:
-                    ispis = f"{file_id} {memory_counter} ELSE\n"
-                    sys.stdout.write(ispis)
-
                     memory_counter_lock.release()
                     memory_condition.wait()
 
@@ -135,10 +120,12 @@ def put(filename, io_pool, file_id):
             # Process the parts in parallel
             results = io_pool.map(put_file_part, parts_data_tuples)
 
-            # Notify everyone we are done
+            # Remove our memory usage from the counter
             memory_counter_lock.acquire()
             memory_counter -= extra_memory
             memory_counter_lock.release()
+
+            # Notify everyone we are done
             memory_condition.acquire()
             memory_condition.notify_all()
             memory_condition.release()
@@ -156,6 +143,7 @@ def put(filename, io_pool, file_id):
 def get(file_id_arg, io_pool):
     global file_register
     global parts_register
+    global memory_counter
     file_id = int(file_id_arg)
 
     file_register_locks[file_id].acquire()
@@ -169,6 +157,21 @@ def get(file_id_arg, io_pool):
         new_filepath = os.path.join(config[STORAGE][SAVED_DIRECTORY], new_filename)
 
         with open(new_filepath, 'wb') as writer:
+
+            # Memory management
+            extra_memory = batch_size * config[SYSTEM][PART_SIZE]
+            memory_condition.acquire()
+            while True:
+                memory_counter_lock.acquire()
+                if memory_counter + extra_memory <= config[SYSTEM][RAM]:
+                    memory_counter += extra_memory
+                    memory_counter_lock.release()
+                    memory_condition.release()
+                    break
+                else:
+                    memory_counter_lock.release()
+                    memory_condition.wait()
+
             for i in range(0, num_parts, batch_size):
                 parts_data_tuples = []                              # List of tuples (part_id, md5_hash)
                 part_ids_batch = part_ids[i:i + batch_size]
@@ -179,6 +182,16 @@ def get(file_id_arg, io_pool):
 
                 # Process the parts in parallel
                 results = io_pool.map(get_file_part, parts_data_tuples)
+
+                # Remove our memory usage from the counter
+                memory_counter_lock.acquire()
+                memory_counter -= extra_memory
+                memory_counter_lock.release()
+
+                # Notify everyone we are done
+                memory_condition.acquire()
+                memory_condition.notify_all()
+                memory_condition.release()
 
                 # If the part is corrupted, the part_data is None
                 for part_data in results:
