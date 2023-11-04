@@ -16,6 +16,11 @@ file_counter = 0
 # Locks for individual parts are not needed since only one thread accesses the parts while processing the file.
 file_register_locks = {}
 
+# Counter for the file_parts in RAM
+memory_counter = 0
+memory_condition = threading.Condition()
+memory_counter_lock = threading.Lock()
+
 # Constants for the file and part register
 READY = "ready"
 FILENAME = "filename"
@@ -23,6 +28,7 @@ MD5_HASH = "md5_hash"
 PARTS_COUNT = "parts_count"
 
 # Constants from the yaml file
+RAM = "ram"
 SYSTEM = "system"
 STORAGE = "storage"
 PART_SIZE = "part_size"
@@ -78,15 +84,46 @@ def delete_file_part(part_filename: str) -> bool:
 def put(filename, io_pool, file_id):
     global file_register
     global parts_register
+    global memory_counter
 
-    file_register_locks[file_counter].acquire()
+    ispis = f"{file_id} PUT\n"
+    sys.stdout.write(ispis)
+    
+
+    file_register_locks[file_id].acquire()
     file_register[file_id] = {FILENAME: filename, READY: False}
 
     with open(filename, 'rb') as file:
         num_parts = (os.path.getsize(filename) + part_size - 1) // part_size
         part_ids = list(range(num_parts))
+        extra_memory = batch_size * config[SYSTEM][PART_SIZE]
 
         for i in range(0, num_parts, batch_size):
+            
+            memory_condition.acquire()
+            while True:
+                
+                sys.stdout.write(str(file_id)) 
+                memory_counter_lock.acquire()
+
+                if memory_counter + extra_memory <= config[SYSTEM][RAM]:
+
+                    memory_counter += extra_memory
+
+                    ispis = f"{file_id} {memory_counter} THEN\n"
+                    sys.stdout.write(ispis)
+
+                    memory_counter_lock.release()
+                    memory_condition.release()
+
+                    break
+                else:
+                    ispis = f"{file_id} {memory_counter} ELSE\n"
+                    sys.stdout.write(ispis)
+
+                    memory_counter_lock.release()
+                    memory_condition.wait()
+
             parts_data_tuples = []                                  # List of tuples (part_id, part_data)
             parts_ids_batch = part_ids[i:i + batch_size]
             for part_id in parts_ids_batch:
@@ -98,6 +135,14 @@ def put(filename, io_pool, file_id):
             # Process the parts in parallel
             results = io_pool.map(put_file_part, parts_data_tuples)
 
+            # Notify everyone we are done
+            memory_counter_lock.acquire()
+            memory_counter -= extra_memory
+            memory_counter_lock.release()
+            memory_condition.acquire()
+            memory_condition.notify_all()
+            memory_condition.release()
+
             # Write the results to the parts register
             for full_part_id, md5_hash in results:
                 parts_register[full_part_id] = {MD5_HASH: md5_hash, READY: True}
@@ -105,7 +150,7 @@ def put(filename, io_pool, file_id):
     if all(parts_register[f"{file_id}_{i}"][READY] for i in range(num_parts)):
         file_register[file_id][READY] = True
         file_register[file_id][PARTS_COUNT] = num_parts
-    file_register_locks[file_counter].release()
+    file_register_locks[file_id].release()
 
 # GET
 def get(file_id_arg, io_pool):
@@ -187,6 +232,7 @@ def list_files():
 
 # Delete created files
 def delete_extra_files():
+    sys.stdout.write(str(memory_counter))
     def delete_files_in_directory(directory):
         if os.path.exists(directory) and os.path.isdir(directory):
             files = os.listdir(directory)
@@ -239,11 +285,10 @@ def main(io_pool):
         else:
             sys.stdout.write("Invalid command\n")
 
+    delete_extra_files()
     io_pool.terminate()             # Doesn't wait for tasks to finish - kills all processes
     for thread in threads:
         thread.join()
-
-    delete_extra_files()
 
 if __name__ == "__main__":
     io_pool = multiprocessing.Pool(processes=config[SYSTEM][IO_PROCESSES])

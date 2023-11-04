@@ -4,3 +4,4 @@ storage:
 system:
   io_processes: 8
   part_size:  1048576          # 1 megabyte = 1024 * 1024 bytes
+  ram: 5242880                # 5 megabytew = 5 * 1024 * 1024 bytes
