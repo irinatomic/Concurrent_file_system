@@ -245,7 +245,6 @@ def list_files():
 
 # Delete created files
 def delete_extra_files():
-    sys.stdout.write(str(memory_counter))
     def delete_files_in_directory(directory):
         if os.path.exists(directory) and os.path.isdir(directory):
             files = os.listdir(directory)
